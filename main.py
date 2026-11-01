@@ -37,7 +37,7 @@ def estimate_measurements(points, width, height, height_inches, crown, floor):
     issue = capture_issue(points)
     if issue:
         raise ValueError(issue)
-    if width <= 0 or height <= 0:
+    if not all(math.isfinite(v) and v > 0 for v in (width, height)):
         raise ValueError('Invalid image dimensions')
     if not all(math.isfinite(v) for v in (crown, floor)):
         raise ValueError('Invalid calibration')
@@ -129,10 +129,10 @@ def main():
         import mediapipe as pose_module
         cv2, mp = camera_module, pose_module
     except ImportError as exc:
-        print(f'Missing dependency: {exc}. Install requirements.txt first.')
+        print(f'Missing dependency: {exc}. Install desktop/requirements.txt first.')
         return 1
     if not hasattr(mp, 'solutions'):
-        print('This prototype requires the MediaPipe solutions API; see requirements.txt.')
+        print('This prototype requires the MediaPipe solutions API; see desktop/requirements.txt.')
         return 1
     while True:
         try:

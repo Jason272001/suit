@@ -1,0 +1,4 @@
+# Only needed for the optional `python main.py` desktop webcam program.
+mediapipe==0.10.21
+opencv-contrib-python==4.11.0.86
+Pillow==11.2.1

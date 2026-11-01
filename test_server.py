@@ -1,4 +1,3 @@
-import base64
 import json
 import threading
 import unittest
@@ -36,7 +35,7 @@ class WebTests(unittest.TestCase):
             return response.status, json.load(response)
 
     def test_page_assets_and_health(self):
-        for path in ('/', '/app.js', '/style.css', '/api/health'):
+        for path in ('/', '/app.js', '/detector.js', '/style.css', '/api/health'):
             with self.subTest(path=path), urlopen(self.url + path) as response:
                 self.assertEqual(response.status, 200)
                 self.assertTrue(response.read())
@@ -55,18 +54,30 @@ class WebTests(unittest.TestCase):
 
     def test_invalid_requests_and_external_origin(self):
         self.assertEqual(self.post('/api/measure', {})[0], 400)
-        self.assertEqual(self.post('/api/detect', {'image': 'not base64!'})[0], 400)
+        self.assertEqual(self.post('/api/detect', {'image': 'not base64!'})[0], 404)
         self.assertEqual(self.post('/api/measure', {}, 'https://example.com')[0], 403)
         self.assertEqual(self.post('/api/nope', {})[0], 404)
 
-    def test_no_body_photo_rejected(self):
-        import cv2
-        import numpy as np
-        success, image = cv2.imencode('.jpg', np.zeros((480, 640, 3), dtype=np.uint8))
-        self.assertTrue(success)
-        status, result = self.post('/api/detect', {'image': base64.b64encode(image).decode()})
-        self.assertEqual(status, 400)
-        self.assertIn('Full body not detected', result['error'])
+    def test_same_origin_requests_and_landmark_payload_limit(self):
+        # An accepted origin reaches input validation, including hosted HTTPS.
+        self.assertEqual(self.post('/api/measure', {}, self.url)[0], 400)
+        self.assertEqual(self.post('/api/measure', {}, self.url.replace('http:', 'https:'))[0], 400)
+        status, result = self.post('/api/measure', {'image': 'x' * 70_000})
+        self.assertEqual(status, 413)
+        self.assertIn('landmarks only', result['error'])
+
+    def test_static_asset_types_and_traversal(self):
+        with urlopen(self.url + '/vendor/wasm/vision_wasm_internal.wasm') as response:
+            self.assertEqual(response.headers['Content-Type'], 'application/wasm')
+        with self.assertRaises(HTTPError) as error:
+            urlopen(self.url + '/../main.py')
+        self.assertEqual(error.exception.code, 404)
+
+    def test_vercel_entry_points_import_without_camera_libraries(self):
+        from api.measure import handler as measurement_handler
+        from api.health import handler as health_handler
+        self.assertTrue(issubclass(measurement_handler, Handler))
+        self.assertTrue(issubclass(health_handler, Handler))
 
 
 if __name__ == '__main__':

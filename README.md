@@ -1,11 +1,33 @@
 # Suit measurement prototype
 
-A local web application with a desktop webcam prototype. Not a validated tailoring scanner.
+A web application with browser-based body detection and a lightweight Python
+measurement backend. Includes an optional desktop webcam prototype. Not a
+validated tailoring scanner.
+
+## Deploy to Vercel
+
+Import `Jason272001/suit` with the repository root as the Root Directory. The
+tracked `vercel.json` selects the Other framework preset, an empty build command,
+`web` as the static output directory, and Python 3.12 functions in `api/`.
+No environment variables, paid add-ons, or external image-processing service are
+required. A push to the connected production branch starts a new deployment.
+
+The root requirements file intentionally has no third-party dependencies. Do not
+add the desktop camera packages to it: their combined dependencies exceeded
+Vercel's 500 MB Python function bundle limit. Desktop dependencies are isolated
+in `desktop/requirements.txt` and excluded from deployment. Model/WASM files in
+`web/vendor/` are static downloads, excluded from the Python function bundle.
+
+Open the successful deployment's HTTPS URL on your phone to test the camera.
+Allow camera access when prompted. The first detection downloads roughly 16 MB
+of self-hosted model/runtime assets (SIMD or non-SIMD variant); allow it to finish.
+If a device cannot run the model, an error appears and you can retry with a
+smaller image or a current browser. Physical Android/iOS testing is still needed.
 
 ## Web version (start here)
 
 Double-click `start-web.bat`, then open http://127.0.0.1:8765 in Chrome or Edge.
-Alternatively run `.venv\Scripts\python.exe server.py` from this folder.
+Alternatively run `python server.py` from this folder (Python 3.10–3.12).
 Keep the terminal open while testing. Stop the server with Ctrl+C.
 
 1. Choose a garment and fit preference; enter measured height in feet/inches,
@@ -18,23 +40,25 @@ Keep the terminal open while testing. Stop the server with Ctrl+C.
    Display can switch between inches and centimetres; exports always use inches.
 5. Clear the session to remove the image and measurements from the page.
 
-The web app sends images only to the Python server on this computer. It does not
-save photos, measurements, or profiles on the server. Downloaded reports remain on
-your computer. There are no accounts, cloud synchronization, or production patterns.
-The layout adapts to smaller screens, but the server binds only to localhost;
-access from a separate phone is not configured. Android/iOS apps are future work.
+Photo pixels stay in the browser. Only 33 landmark coordinates, image dimensions,
+entered height, and calibration marks are sent to `/api/measure`. The backend does
+not save them. Downloaded reports remain on your device. There are no accounts,
+cloud synchronization, or production patterns. The local server binds to localhost;
+use the deployed HTTPS website to access the app from a separate phone.
+Native Android/iOS apps are future work.
 Browser camera access requires localhost or HTTPS. If the in-app browser cannot
 use your webcam, open the same address in Chrome/Edge or choose a photo.
 
-Python dependencies must be installed before launching. MediaPipe's first model
-initialization can take several seconds. Errors are shown above capture controls.
+The web server needs no third-party Python packages. Body detection runs with the
+pinned, self-hosted MediaPipe Tasks Vision 0.10.21 and Pose Landmarker Lite model.
+First initialization can take several seconds. Errors appear above capture controls.
 
 ## Desktop version
 
 Use Python 3.10–3.12 in a virtual environment:
 
 ```powershell
-python -m pip install -r requirements.txt
+python -m pip install -r desktop/requirements.txt
 python main.py
 ```
 
@@ -65,7 +89,8 @@ Capture checks do not validate posture, perspective, or measurement accuracy.
 ## Verification and next milestone
 
 ```powershell
-python -m unittest -v
+python -S -m unittest -v
+node --test test_detector.mjs
 ```
 
 Tests exercise invalid heights, capture rejection, calibration geometry, scale

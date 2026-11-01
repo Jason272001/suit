@@ -1,47 +1,35 @@
-"""Local-only web application. Run with .venv/Scripts/python.exe server.py."""
-import base64
-import binascii
+"""Dependency-free measurement API and local web preview server."""
 import json
-import threading
+import mimetypes
+import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import SimpleNamespace
+from urllib.parse import urlsplit
 
-from main import capture_issue, estimate_measurements
+from main import estimate_measurements
 
 WEB = Path(__file__).parent / 'web'
-MAX_BODY = 12 * 1024 * 1024
-detector_lock = threading.Lock()
-detector = None
+MAX_BODY = 64 * 1024
+CSP = ("default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; "
+       "img-src 'self' blob: data:; media-src 'self' blob:; style-src 'self'; "
+       "connect-src 'self'; worker-src 'self' blob:; frame-ancestors 'none'")
 
 
-def detect_image(encoded):
-    import cv2
-    import mediapipe as mp
-    import numpy as np
-    global detector
-    raw = base64.b64decode(encoded, validate=True)
-    # Reject excessive dimensions before allocating the decoded raster.
-    from PIL import Image
-    from io import BytesIO
-    with Image.open(BytesIO(raw)) as header:
-        if header.width * header.height > 16_000_000:
-            raise ValueError('Photo too large. Use a photo under 16 megapixels.')
-    image = cv2.imdecode(np.frombuffer(raw, dtype=np.uint8), cv2.IMREAD_COLOR)
-    if image is None:
-        raise ValueError('Cannot read photo. Use a JPEG or PNG image.')
-    height, width = image.shape[:2]
-    with detector_lock:
-        if detector is None:
-            detector = mp.solutions.pose.Pose(static_image_mode=True, model_complexity=1,
-                                               min_detection_confidence=0.7)
-        result = detector.process(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
-    points = result.pose_landmarks.landmark if result.pose_landmarks else None
-    issue = capture_issue(points)
-    if issue:
-        raise ValueError(issue + '. Retake facing the camera with head, hands and feet visible.')
-    return {'width': width, 'height': height,
-            'points': [{'x': p.x, 'y': p.y, 'visibility': p.visibility} for p in points]}
+def measure(data):
+    if not isinstance(data, dict):
+        raise ValueError('Expected a JSON object.')
+    points = data['points']
+    if not isinstance(points, list) or len(points) != 33:
+        raise ValueError('Expected exactly 33 body landmarks.')
+    points = [SimpleNamespace(x=p['x'], y=p['y'], visibility=p['visibility']) for p in points]
+    for key in ('width', 'height', 'height_inches', 'crown', 'floor'):
+        value = data[key]
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError(f'{key} must be a number.')
+    return {'estimates': estimate_measurements(
+        points, data['width'], data['height'], data['height_inches'],
+        data['crown'], data['floor'])}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -51,65 +39,60 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header('Content-Type', 'application/json')
         self.send_header('Content-Length', str(len(body)))
         self.send_header('Cache-Control', 'no-store')
+        self.send_header('X-Content-Type-Options', 'nosniff')
         self.end_headers()
         self.wfile.write(body)
 
     def do_GET(self):
-        paths = {'/': ('index.html', 'text/html; charset=utf-8'),
-                 '/app.js': ('app.js', 'text/javascript; charset=utf-8'),
-                 '/style.css': ('style.css', 'text/css; charset=utf-8')}
-        if self.path == '/api/health':
-            return self.reply(200, {'status': 'ok'})
-        if self.path not in paths:
+        path = urlsplit(self.path).path
+        if path == '/api/health':
+            return self.reply(200, {'status': 'ok', 'inference': 'browser'})
+        if path.startswith('/api/'):
             return self.reply(404, {'error': 'Not found'})
-        name, mime = paths[self.path]
-        body = (WEB / name).read_bytes()
+        file = (WEB / (path.lstrip('/') or 'index.html')).resolve()
+        if not file.is_relative_to(WEB.resolve()) or not file.is_file():
+            return self.reply(404, {'error': 'Not found'})
+        body = file.read_bytes()
+        mime = {'.mjs': 'text/javascript', '.js': 'text/javascript',
+                '.wasm': 'application/wasm', '.task': 'application/octet-stream'}.get(file.suffix)
+        mime = mime or mimetypes.guess_type(str(file))[0] or 'application/octet-stream'
         self.send_response(200)
         self.send_header('Content-Type', mime)
         self.send_header('Content-Length', str(len(body)))
-        self.send_header('Cache-Control', 'no-store')
+        self.send_header('Cache-Control', 'no-cache')
         self.send_header('X-Content-Type-Options', 'nosniff')
-        self.send_header('Content-Security-Policy', "default-src 'self'; img-src 'self' blob: data:; media-src 'self' blob:; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'")
+        self.send_header('Content-Security-Policy', CSP)
         self.end_headers()
         self.wfile.write(body)
 
     def do_POST(self):
-        # No CORS; reject browser requests originating outside this local app.
-        if self.headers.get('Origin') not in (None, 'http://127.0.0.1:8765', 'http://localhost:8765'):
-            return self.reply(403, {'error': 'Use the local application address.'})
+        origin = self.headers.get('Origin')
+        host = self.headers.get('Host')
+        if origin:
+            parsed = urlsplit(origin)
+            if parsed.scheme not in ('http', 'https') or parsed.netloc != host:
+                return self.reply(403, {'error': 'Use this application from its own website.'})
+        if urlsplit(self.path).path != '/api/measure':
+            return self.reply(404, {'error': 'Not found'})
         if self.headers.get('Content-Type', '').split(';')[0] != 'application/json':
             return self.reply(415, {'error': 'Expected application/json'})
         try:
             length = int(self.headers.get('Content-Length', '0'))
             if not 0 < length <= MAX_BODY:
-                return self.reply(413, {'error': 'Request too large or empty. Choose a smaller photo.'})
+                return self.reply(413, {'error': 'Send landmarks only; images are processed in your browser.'})
             data = json.loads(self.rfile.read(length))
-            if not isinstance(data, dict):
-                raise ValueError('Invalid request')
-            if self.path == '/api/detect':
-                result = detect_image(data['image'])
-            elif self.path == '/api/measure':
-                points = [SimpleNamespace(**p) for p in data['points']]
-                result = {'estimates': estimate_measurements(
-                    points, data['width'], data['height'], data['height_inches'],
-                    data['crown'], data['floor'])}
-            else:
-                return self.reply(404, {'error': 'Not found'})
-            self.reply(200, result)
-        except (ValueError, TypeError, KeyError, AttributeError, binascii.Error, OSError) as exc:
+            self.reply(200, measure(data))
+        except (ValueError, TypeError, KeyError, AttributeError, OverflowError) as exc:
             self.reply(400, {'error': str(exc) or 'Invalid request'})
-        except Exception:
-            self.reply(500, {'error': 'Image processing failed. Check server dependencies and try again.'})
 
 
 if __name__ == '__main__':
-    server = ThreadingHTTPServer(('127.0.0.1', 8765), Handler)
-    print('Suit Studio ready at http://127.0.0.1:8765', flush=True)
+    port = int(os.environ.get('PORT', '8765'))
+    server = ThreadingHTTPServer(('127.0.0.1', port), Handler)
+    print(f'Suit Studio ready at http://127.0.0.1:{port}', flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
     finally:
         server.server_close()
-        if detector is not None:
-            detector.close()

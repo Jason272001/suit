@@ -1,4 +1,5 @@
 'use strict';
+import {detectPhoto} from './detector.js';
 const $ = id => document.getElementById(id);
 const labels = {
   shoulder_landmark_span: 'Shoulder joint span',
@@ -119,7 +120,7 @@ async function processPhoto(source) {
     ctx.drawImage(image,0,0,canvas.width,canvas.height);
     photo = new Image(); photo.src = canvas.toDataURL('image/jpeg',0.92); await photo.decode();
     canvas.hidden = false; $('empty').hidden = true; $('video').hidden = true;
-    const result = await api('/api/detect',{image:photo.src.split(',')[1]});
+    const result = await detectPhoto(photo);
     if (current !== revision) return;
     detection = result; $('calibration').hidden = false; $('step2').classList.add('active');
     $('crown').value = 50; $('floor').value = 950; draw();

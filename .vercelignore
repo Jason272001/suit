@@ -1,0 +1,10 @@
+.git
+.venv
+.idea
+__pycache__
+reports
+measurements.txt
+desktop
+test_main.py
+test_server.py
+test_detector.mjs
