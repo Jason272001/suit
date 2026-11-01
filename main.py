@@ -1,5 +1,6 @@
 """Camera-assisted landmark estimates; not a validated tailoring scanner."""
 import json
+import uuid
 import math
 from datetime import datetime, timezone
 from pathlib import Path
@@ -107,7 +108,7 @@ def save_report(values, height_inches, output_dir=None):
     folder = Path(output_dir) if output_dir else Path(__file__).parent / 'reports'
     folder.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc)
-    path = folder / (stamp.strftime('measurements-%Y%m%dT%H%M%S-%fZ') + '.json')
+    path = folder / (stamp.strftime('measurements-%Y%m%dT%H%M%S-%fZ') + '-' + uuid.uuid4().hex + '.json')
     report = {
         'schema_version': 1, 'created_at': stamp.isoformat(), 'units': 'inches',
         'status': 'unvalidated_landmark_estimates', 'entered_height': height_inches,
