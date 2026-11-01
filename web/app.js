@@ -11,6 +11,8 @@ const labels = {
 const manualLabels = {chest_circumference:'Chest circumference', waist_circumference:'Waist circumference', hip_circumference:'Hip circumference', thigh_circumference:'Thigh circumference', inseam:'Inseam', outseam:'Outseam', garment_sleeve_length:'Garment sleeve length'};
 let stream = null, photo = null, detection = null, marks = [], estimates = null;
 let measuredHeight = null, manual = {}, revision = 0, busy = false, countdown = null;
+let referenceMarks = [], heightEvidence = null;
+const usingReference = () => $('heightSource').value === 'reference';
 const ctx = $('canvas').getContext('2d');
 $('uploadLabel').tabIndex = 0;
 $('uploadLabel').setAttribute('role','button');
@@ -19,6 +21,8 @@ $('uploadLabel').onkeydown = event => {
 };
 function status(message, error = false) { $('status').textContent = message; $('status').classList.toggle('error', error); }
 function heightInches() {
+  const empty = $('unit').value === 'ft' ? !$('feet').value && !$('inches').value : !$('height').value;
+  if (usingReference() && empty) return null;
   let value;
   if ($('unit').value === 'ft') {
     const feet = Number($('feet').value), inches = Number($('inches').value);
@@ -31,6 +35,17 @@ function heightInches() {
   if (!Number.isFinite(value) || value < 24 || value > 100) throw Error('Height must be between 24 and 100 inches (61–254 cm).');
   return value;
 }
+function referenceLength() {
+  const length = Number($('referenceType').value === 'custom' ? $('referenceLength').value : $('referenceType').value);
+  if (!Number.isFinite(length) || length < 10 || length > 200) throw Error('Enter the actual vertical reference length, from 10 to 200 cm.');
+  return length;
+}
+function captureSetup() { heightInches(); if (usingReference()) referenceLength(); }
+function calibrationPrompt() {
+  if (marks.length < 2) return marks.length ? 'Now mark the floor beneath your feet.' : 'Mark the top of your head, then the floor beneath your feet.';
+  if (usingReference() && referenceMarks.length < 2) return referenceMarks.length ? 'Now mark the BOTTOM of the known vertical reference edge.' : 'Now mark the TOP of the known vertical reference edge.';
+  return 'Check all marks, confirm reference placement if applicable, then generate estimates.';
+}
 function stopCamera() {
   if (countdown) { clearInterval(countdown); countdown = null; }
   if (stream) stream.getTracks().forEach(track => track.stop());
@@ -40,7 +55,7 @@ function stopCamera() {
 }
 function lock(value) {
   busy = value;
-  for (const id of ['camera','snap','photo','measure','retake','resetMarks','clear','unit','feet','inches','height']) $(id).disabled = value;
+  for (const id of ['camera','snap','photo','measure','retake','resetMarks','clear','unit','feet','inches','height','heightSource','referenceType','referenceLength','setupConfirmed','crown','floor','refTopX','refTopY','refBottomX','refBottomY']) $(id).disabled = value;
   $('uploadLabel').setAttribute('aria-disabled', String(value));
 }
 async function api(path, data) {
@@ -49,13 +64,22 @@ async function api(path, data) {
   if (!response.ok) throw Error(result.error || 'Request failed. Try again.');
   return result;
 }
-function invalidateResults() { estimates = null; measuredHeight = null; $('results').hidden = true; $('step3').classList.remove('active'); }
+function invalidateResults() { estimates = null; measuredHeight = null; heightEvidence = null; $('heightReview').hidden = true; $('results').hidden = true; $('step3').classList.remove('active'); }
 function clearCapture() {
-  revision++; stopCamera(); photo = null; detection = null; marks = [];
+  revision++; stopCamera(); photo = null; detection = null; marks = []; referenceMarks = []; $('setupConfirmed').checked = false;
   $('canvas').hidden = true; $('empty').hidden = false; $('calibration').hidden = true;
   $('photo').value = ''; invalidateResults(); $('step2').classList.remove('active');
   $('canvas').width = 1; $('canvas').height = 1;
 }
+$('heightSource').onchange = () => {
+  $('referenceSetup').hidden = !usingReference(); $('referenceMarks').hidden = !usingReference();
+  $('heightEntryLabel').textContent = usingReference() ? 'Optional measured height for cross-check' : 'Your measured height (required)';
+  referenceMarks = []; $('setupConfirmed').checked = false; invalidateResults(); draw();
+  status(usingReference() ? 'Include a known-length vertical reference beside your body. You can leave height blank.' : 'Enter a measured height. This mode cannot independently check your height.');
+};
+$('referenceType').onchange = () => { $('customReferenceField').hidden = $('referenceType').value !== 'custom'; $('setupConfirmed').checked=false; invalidateResults(); };
+$('referenceLength').oninput = () => { $('setupConfirmed').checked=false; invalidateResults(); };
+$('setupConfirmed').onchange = invalidateResults;
 $('unit').onchange = () => {
   const unit = $('unit').value;
   $('feetFields').hidden = unit !== 'ft'; $('singleField').hidden = unit === 'ft';
@@ -65,7 +89,7 @@ $('unit').onchange = () => {
 for (const id of ['feet','inches','height']) $(id).oninput = invalidateResults;
 $('camera').onclick = async () => {
   try {
-    heightInches(); clearCapture(); lock(true);
+    captureSetup(); clearCapture(); lock(true);
     if (!navigator.mediaDevices?.getUserMedia) throw Error('Camera unavailable here. Open this app on localhost in Chrome or Edge, or choose a photo.');
     status('Requesting camera access…');
     stream = await navigator.mediaDevices.getUserMedia({video:{width:{ideal:1280},height:{ideal:960},facingMode:'user'},audio:false});
@@ -99,7 +123,7 @@ $('photo').onchange = async event => {
   if (busy) return;
   const file = event.target.files[0]; if (!file) return;
   try {
-    heightInches();
+    captureSetup();
     if (file.size > 12 * 1024 * 1024) throw Error('Choose a photo smaller than 12 MB.');
     if (!['image/jpeg','image/png','image/webp'].includes(file.type)) throw Error('Choose a JPEG, PNG or WebP photo.');
     stopCamera();
@@ -109,7 +133,7 @@ $('photo').onchange = async event => {
   finally { $('photo').value = ''; }
 };
 async function processPhoto(source) {
-  lock(true); invalidateResults(); detection = null; marks = []; $('calibration').hidden = true;
+  lock(true); invalidateResults(); detection = null; marks = []; referenceMarks = []; $('setupConfirmed').checked = false; $('calibration').hidden = true;
   const current = ++revision;
   try {
     status('Checking full-body visibility… The first capture may take a moment.');
@@ -123,8 +147,9 @@ async function processPhoto(source) {
     const result = await detectPhoto(photo);
     if (current !== revision) return;
     detection = result; $('calibration').hidden = false; $('step2').classList.add('active');
+    for (const [id,value] of Object.entries({refTopX:150,refTopY:400,refBottomX:150,refBottomY:550})) $(id).value=value;
     $('crown').value = 50; $('floor').value = 950; draw();
-    status('Body detected. Click the top of your head, then the floor beneath your feet.');
+    status('Body detected. ' + calibrationPrompt());
   } catch (error) { status(error.message,true); }
   finally { lock(false); }
 }
@@ -138,25 +163,50 @@ function draw() {
     for (const p of detection.points) { ctx.beginPath(); ctx.arc(p.x*w,p.y*h,Math.max(3,w/300),0,Math.PI*2); ctx.fillStyle = '#d7f3c1'; ctx.fill(); }
   }
   marks.forEach((y,index) => { ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(w,y); ctx.strokeStyle = '#c9ff9c'; ctx.stroke(); ctx.font = `${Math.max(14,w/55)}px Arial`; ctx.fillStyle = '#c9ff9c'; ctx.fillText(index === 0 ? 'TOP OF HEAD' : 'FLOOR',10,Math.max(18,y-8)); });
+  if (usingReference()) {
+    ctx.strokeStyle = '#ffb65b'; ctx.fillStyle = '#ffb65b';
+    referenceMarks.forEach((point,index) => { ctx.beginPath(); ctx.arc(point.x,point.y,Math.max(5,w/150),0,Math.PI*2); ctx.fill(); ctx.fillText(index ? 'REF BOTTOM' : 'REF TOP',point.x+10,point.y); });
+    if (referenceMarks.length === 2) { ctx.beginPath(); ctx.moveTo(referenceMarks[0].x,referenceMarks[0].y); ctx.lineTo(referenceMarks[1].x,referenceMarks[1].y); ctx.stroke(); }
+  }
 }
 $('canvas').onclick = event => {
-  if (!detection || busy || marks.length >= 2) return;
+  if (!detection || busy) return;
   const rect = $('canvas').getBoundingClientRect();
-  marks.push(Math.max(0,Math.min($('canvas').height-1,(event.clientY-rect.top)*$('canvas').height/rect.height)));
-  $(marks.length === 1 ? 'crown' : 'floor').value = marks[marks.length-1]/$('canvas').height*1000;
+  const y = Math.max(0,Math.min($('canvas').height-1,(event.clientY-rect.top)*$('canvas').height/rect.height));
+  const x = Math.max(0,Math.min($('canvas').width-1,(event.clientX-rect.left)*$('canvas').width/rect.width));
+  if (marks.length < 2) {
+    marks.push(y); $(marks.length === 1 ? 'crown' : 'floor').value = y/$('canvas').height*1000;
+  } else if (usingReference() && referenceMarks.length < 2) {
+    referenceMarks.push({x,y}); const prefix = referenceMarks.length === 1 ? 'refTop' : 'refBottom';
+    $(prefix+'X').value = x/$('canvas').width*1000; $(prefix+'Y').value = y/$('canvas').height*1000;
+  } else return;
   invalidateResults(); draw();
-  status(marks.length === 1 ? 'Now click the floor beneath your feet.' : 'Check the two lines, then generate estimates.');
+  status(calibrationPrompt());
 };
 for (const id of ['crown','floor']) $(id).oninput = () => { marks = [Number($('crown').value)/1000*$('canvas').height,Math.min($('canvas').height-1,Number($('floor').value)/1000*$('canvas').height)]; invalidateResults(); draw(); status('Calibration adjusted. Generate estimates when the lines enclose your full height.'); };
-$('resetMarks').onclick = () => { marks=[]; invalidateResults(); draw(); status('Click the top of your head, then the floor beneath your feet.'); };
+for (const id of ['refTopX','refTopY','refBottomX','refBottomY']) $(id).oninput = () => {
+  referenceMarks = [{x:Number($('refTopX').value)/1000*$('canvas').width,y:Number($('refTopY').value)/1000*$('canvas').height}, {x:Number($('refBottomX').value)/1000*$('canvas').width,y:Number($('refBottomY').value)/1000*$('canvas').height}];
+  invalidateResults(); draw(); status(calibrationPrompt());
+};
+$('resetMarks').onclick = () => { marks=[]; referenceMarks=[]; $('setupConfirmed').checked=false; invalidateResults(); draw(); status(calibrationPrompt()); };
 $('retake').onclick = () => { clearCapture(); status('Ready for another camera capture or photo.'); };
 $('measure').onclick = async () => {
   try {
     const height = heightInches();
     if (!detection || marks.length !== 2) throw Error('Mark both the top of your head and the floor first.');
+    let reference = null;
+    if (usingReference()) {
+      if (referenceMarks.length !== 2) throw Error('Mark the TOP and BOTTOM of the reference object, or adjust its sliders.');
+      if (!$('setupConfirmed').checked) throw Error('Confirm the reference placement and camera setup before calculating height.');
+      reference = {top:referenceMarks[0],bottom:referenceMarks[1],length_cm:referenceLength(),setup_confirmed:true};
+    }
     lock(true); status('Calculating calibrated landmark estimates…');
-    const result = await api('/api/measure',{...detection,height_inches:height,crown:marks[0],floor:marks[1]});
-    estimates = result.estimates; measuredHeight = height; renderResults();
+    const result = await api('/api/measure',{...detection,height_source:$('heightSource').value,height_inches:height,reference,crown:marks[0],floor:marks[1]});
+    heightEvidence = result.height;
+    $('heightReview').hidden = false;
+    $('heightReview').textContent = `${usingReference() ? 'Reference-estimated' : 'Entered'} height: ${(result.height.inches*2.54).toFixed(1)} cm (${result.height.inches.toFixed(1)} in). Unverified. ${result.message || 'Perspective, posture and reference placement can still cause error.'}`;
+    if (!result.estimates) { status(result.message,true); $('heightReview').scrollIntoView({behavior:'smooth',block:'center'}); return; }
+    estimates = result.estimates; measuredHeight = result.height.inches; renderResults();
     $('results').hidden = false; $('step3').classList.add('active'); $('results').scrollIntoView({behavior:'smooth'});
     status('Your estimates are ready. Review the results and add any tape measurements below.');
   } catch (error) { status(error.message,true); }
@@ -165,6 +215,7 @@ $('measure').onclick = async () => {
 function renderResults() {
   const factor = $('displayUnit').value === 'cm' ? 2.54 : 1;
   const unit = $('displayUnit').value;
+  $('heightSummary').textContent = `${heightEvidence?.source === 'reference' ? 'Reference-estimated' : 'Entered'} height: ${(measuredHeight*factor).toFixed(1)} ${unit}. ${heightEvidence?.source === 'reference' ? 'Independent of entered height; calibration accuracy is not yet validated.' : 'Not independently verified by the scan.'} Weight is not required. Not approved for garment production.`;
   $('estimateGrid').replaceChildren();
   for (const [key,value] of Object.entries(estimates || {})) {
     const card = document.createElement('div'); card.className = 'estimate';
@@ -190,7 +241,7 @@ $('displayUnit').onchange = renderResults;
 $('download').onclick = () => {
   for (const input of $('manualGrid').querySelectorAll('input')) if (!input.reportValidity()) return;
   if (!estimates) return;
-  const report = {schema_version:2,created_at:new Date().toISOString(),units:'inches',entered_height:measuredHeight,garment:$('garment').value,preferred_fit:$('fit').value,status:'unvalidated_landmark_estimates',calibration:'user_marked_crown_and_floor',camera_estimates:estimates,manual_measurements:manual,requires_manual_measurement:Object.keys(manualLabels).filter(key => !(key in manual)),notes:['All exported values are inches.','Manual entries are user-supplied and unverified.','Projected landmark lengths are not garment dimensions. Confirm with a tailor before production.']};
+  const report = {schema_version:3,pipeline_version:'reference_v1',capture_geometry:{width:detection.width,height:detection.height,crown:marks[0],floor:marks[1]},created_at:new Date().toISOString(),units:'inches',entered_height:heightEvidence.entered_inches,height_used:measuredHeight,height_evidence:heightEvidence,production_ready:false,weight:{status:'not_measured',required:false},garment:$('garment').value,preferred_fit:$('fit').value,status:'unvalidated_landmark_estimates',calibration:heightEvidence.source === 'reference' ? 'known_vertical_reference' : 'user_entered_height',camera_estimates:estimates,manual_measurements:manual,requires_manual_measurement:Object.keys(manualLabels).filter(key => !(key in manual)),notes:['Body measurements and height are inches. Reference length is explicitly labelled in cm; reference coordinates are pixels.','Manual entries are user-supplied and unverified.','No perfect-scan or accuracy guarantee. Projected landmark lengths are not garment dimensions. Confirm with a tailor before production.']};
   const url = URL.createObjectURL(new Blob([JSON.stringify(report,null,2)],{type:'application/json'}));
   const link = document.createElement('a'); link.href=url; link.download=`suit-measurements-${new Date().toISOString().replace(/[:.]/g,'-')}.json`; link.click(); setTimeout(()=>URL.revokeObjectURL(url),1000);
 };

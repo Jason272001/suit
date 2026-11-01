@@ -30,22 +30,36 @@ Double-click `start-web.bat`, then open http://127.0.0.1:8765 in Chrome or Edge.
 Alternatively run `python server.py` from this folder (Python 3.10–3.12).
 Keep the terminal open while testing. Stop the server with Ctrl+C.
 
-1. Choose a garment and fit preference; enter measured height in feet/inches,
-   centimetres, or total inches. Enter zero explicitly for zero inches.
+1. Choose a garment and fit preference. By default, reference-object mode lets
+   you leave height unknown. Put a flat A4/US Letter sheet (long edge vertical)
+   or a measured reference beside your body, at the same depth as your body.
+   If you already measured your height, choose entered-height mode instead.
 2. Start the camera and allow browser access. Capture uses a five-second timer.
    Alternatively choose a JPEG, PNG, or WebP full-body photo.
-3. After detection, mark the top of the head and floor at the feet on the frozen
-   image. Sliders provide an alternative to clicking. Generate estimates.
+3. After detection, mark head top and floor. In reference mode, also mark the
+   top/bottom of the reference's known vertical edge and confirm its setup.
+   Sliders provide an alternative to clicking. Generate estimates. An optional
+   entered height is cross-checked; a discrepancy of one inch or more blocks results.
 4. Review camera estimates, optionally enter tape measurements, and download JSON.
    Display can switch between inches and centimetres; exports always use inches.
 5. Clear the session to remove the image and measurements from the page.
 
 Photo pixels stay in the browser. Only 33 landmark coordinates, image dimensions,
-entered height, and calibration marks are sent to `/api/measure`. The backend does
+optional entered height, and reference/calibration marks are sent to `/api/measure`. The backend does
 not save them. Downloaded reports remain on your device. There are no accounts,
 cloud synchronization, or production patterns. The local server binds to localhost;
 use the deployed HTTPS website to access the app from a separate phone.
 Native Android/iOS apps are future work.
+
+Reference height remains an **unvalidated estimate**: same-depth alignment,
+perspective, correct object length, manual marks and posture all affect scale.
+Entered-height mode cannot independently verify a person's height. Weight is
+neither required nor inferred. Reports include the height source and calibration
+evidence and are always marked `production_ready:false`.
+
+See [accuracy validation and booth development](docs/ACCURACY_VALIDATION.md) for
+the independent-measurement protocol and `evaluate_height.py` evaluation utility.
+No new model has been trained without a consented, independently labelled dataset.
 Browser camera access requires localhost or HTTPS. If the in-app browser cannot
 use your webcam, open the same address in Chrome/Edge or choose a photo.
 

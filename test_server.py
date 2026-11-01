@@ -58,6 +58,19 @@ class WebTests(unittest.TestCase):
         self.assertEqual(self.post('/api/measure', {}, 'https://example.com')[0], 403)
         self.assertEqual(self.post('/api/nope', {})[0], 404)
 
+    def test_reference_height_conflict_through_http(self):
+        from test_calibration import ReferenceCalibrationTests
+        fixture = ReferenceCalibrationTests()
+        fixture.setUp()
+        status, result = self.post('/api/measure', fixture.data)
+        self.assertEqual(status, 200)
+        self.assertAlmostEqual(result['height']['inches'], 72)
+        fixture.data['height_inches'] = 73
+        status, result = self.post('/api/measure', fixture.data)
+        self.assertEqual(status, 200)
+        self.assertEqual(result['height']['status'], 'height_conflict')
+        self.assertIsNone(result['estimates'])
+
     def test_same_origin_requests_and_landmark_payload_limit(self):
         # An accepted origin reaches input validation, including hosted HTTPS.
         self.assertEqual(self.post('/api/measure', {}, self.url)[0], 400)

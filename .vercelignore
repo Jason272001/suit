@@ -8,3 +8,7 @@ desktop
 test_main.py
 test_server.py
 test_detector.mjs
+test_calibration.py
+test_evaluate_height.py
+evaluate_height.py
+docs

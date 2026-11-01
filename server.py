@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from urllib.parse import urlsplit
 
 from main import estimate_measurements
+from calibration import resolve_height
 
 WEB = Path(__file__).parent / 'web'
 MAX_BODY = 64 * 1024
@@ -23,13 +24,17 @@ def measure(data):
     if not isinstance(points, list) or len(points) != 33:
         raise ValueError('Expected exactly 33 body landmarks.')
     points = [SimpleNamespace(x=p['x'], y=p['y'], visibility=p['visibility']) for p in points]
-    for key in ('width', 'height', 'height_inches', 'crown', 'floor'):
+    for key in ('width', 'height', 'crown', 'floor'):
         value = data[key]
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise ValueError(f'{key} must be a number.')
+    height = resolve_height(data, points)
+    if height['status'] == 'height_conflict':
+        return {'estimates': None, 'height': height, 'production_ready': False,
+                'message': 'Reference height differs from your entered height by one inch or more. Verify the reference setup and both height marks; correct the entered height or leave it blank if unknown.'}
     return {'estimates': estimate_measurements(
-        points, data['width'], data['height'], data['height_inches'],
-        data['crown'], data['floor'])}
+        points, data['width'], data['height'], height['inches'],
+        data['crown'], data['floor']), 'height': height, 'production_ready': False}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -46,7 +51,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         path = urlsplit(self.path).path
         if path == '/api/health':
-            return self.reply(200, {'status': 'ok', 'inference': 'browser'})
+            return self.reply(200, {'status': 'ok', 'inference': 'browser', 'height_calibration': 'reference_v1'})
         if path.startswith('/api/'):
             return self.reply(404, {'error': 'Not found'})
         file = (WEB / (path.lstrip('/') or 'index.html')).resolve()
