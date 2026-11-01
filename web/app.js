@@ -12,6 +12,7 @@ const manualLabels = {chest_circumference:'Chest circumference', waist_circumfer
 let stream = null, photo = null, detection = null, marks = [], estimates = null;
 let measuredHeight = null, manual = {}, revision = 0, busy = false, countdown = null;
 let referenceMarks = [], heightEvidence = null;
+let autoSession = 0;
 const usingReference = () => $('heightSource').value === 'reference';
 const ctx = $('canvas').getContext('2d');
 $('uploadLabel').tabIndex = 0;
@@ -47,6 +48,7 @@ function calibrationPrompt() {
   return 'Check all marks, confirm reference placement if applicable, then generate estimates.';
 }
 function stopCamera() {
+  autoSession++; $('viewfinder').classList.remove('scan-ready');
   if (countdown) { clearInterval(countdown); countdown = null; }
   if (stream) stream.getTracks().forEach(track => track.stop());
   stream = null; $('video').srcObject = null; $('video').hidden = true;
@@ -95,8 +97,9 @@ $('camera').onclick = async () => {
     stream = await navigator.mediaDevices.getUserMedia({video:{width:{ideal:1280},height:{ideal:960},facingMode:'user'},audio:false});
     $('video').srcObject = stream; await $('video').play();
     $('empty').hidden = true; $('video').hidden = false; $('camera').hidden = true;
-    $('snap').hidden = false; $('stop').hidden = false; $('step2').classList.add('active');
-    status('Camera ready. Stand back until your full body fits. Capture gives you 5 seconds to get into position.');
+    $('snap').hidden = true; $('stop').hidden = false; $('step2').classList.add('active');
+    status('Step into position. I will wait until your full body is visible and steady.');
+    monitorCamera(++autoSession);
   } catch (error) {
     stopCamera(); $('empty').hidden = false;
     const messages = {NotAllowedError:'Camera permission was denied. Allow camera access in your browser or choose a photo.',NotFoundError:'No camera found. Connect a webcam or choose a photo.',NotReadableError:'Camera is in use by another application. Close it or choose a photo.'};
@@ -104,21 +107,44 @@ $('camera').onclick = async () => {
   } finally { lock(false); }
 };
 $('stop').onclick = () => { stopCamera(); $('empty').hidden = false; status('Camera stopped. Start again or choose a photo.'); };
-$('snap').onclick = () => {
-  if (!stream || countdown || busy) return;
-  let remaining = 5; $('snap').disabled = true;
-  status(`Capturing in ${remaining}… Stand straight and keep both feet visible.`);
-  countdown = setInterval(() => {
-    remaining--;
-    if (remaining > 0) return status(`Capturing in ${remaining}…`);
-    clearInterval(countdown); countdown = null;
-    const video = $('video');
-    if (!video.videoWidth || !video.videoHeight) { stopCamera(); return status('Camera has no image. Please try again.', true); }
-    const temporary = document.createElement('canvas'); temporary.width = video.videoWidth; temporary.height = video.videoHeight;
-    temporary.getContext('2d').drawImage(video,0,0);
-    stopCamera(); processPhoto(temporary.toDataURL('image/jpeg',0.92));
-  },1000);
-};
+async function monitorCamera(session) {
+  let previous = null, steadySince = null;
+  const sample = document.createElement('canvas');
+  while (stream && session === autoSession) {
+    try {
+      const video = $('video');
+      if (!video.videoWidth) throw Error('Waiting for the camera…');
+      const scale = Math.min(1,960/video.videoWidth);
+      sample.width = Math.round(video.videoWidth*scale); sample.height = Math.round(video.videoHeight*scale);
+      sample.getContext('2d').drawImage(video,0,0,sample.width,sample.height);
+      const image = new Image(); image.src = sample.toDataURL('image/jpeg',0.9); await image.decode();
+      const body = await detectPhoto(image);
+      if (session !== autoSession || !stream) return;
+      const indices = [0,11,12,23,24,25,26,27,28];
+      const upright = body.points[11].y < body.points[23].y && body.points[23].y < body.points[25].y && body.points[25].y < body.points[27].y;
+      if (!upright) throw Error('Stand upright facing the camera, with straight legs.');
+      const movement = previous ? Math.max(...indices.map(i => Math.hypot(body.points[i].x-previous[i].x,body.points[i].y-previous[i].y))) : Infinity;
+      previous = body.points;
+      if (movement > 0.015) steadySince = null;
+      else if (steadySince === null) steadySince = performance.now();
+      const elapsed = steadySince === null ? 0 : performance.now()-steadySince;
+      $('viewfinder').classList.toggle('scan-ready',elapsed>0);
+      status(elapsed>0 ? `Good position. Hold still… ${Math.min(100,Math.round(elapsed/3500*100))}%` : 'Full body found. Stand still and face the camera.');
+      if (elapsed >= 3500) {
+        const source = image.src; stopCamera();
+        await processPhoto(source);
+        if (detection) status('Good job — steady full-body capture complete. Review the height calibration below to calculate measurements.');
+        return;
+      }
+    } catch (error) {
+      if (session !== autoSession) return;
+      previous=null; steadySince=null; $('viewfinder').classList.remove('scan-ready');
+      status(error.message);
+      if (/Could not load|could not run/.test(error.message)) { stopCamera(); status(error.message,true); return; }
+    }
+    await new Promise(resolve=>setTimeout(resolve,500));
+  }
+}
 $('photo').onchange = async event => {
   if (busy) return;
   const file = event.target.files[0]; if (!file) return;

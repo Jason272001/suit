@@ -34,7 +34,7 @@ Keep the terminal open while testing. Stop the server with Ctrl+C.
    you leave height unknown. Put a flat A4/US Letter sheet (long edge vertical)
    or a measured reference beside your body, at the same depth as your body.
    If you already measured your height, choose entered-height mode instead.
-2. Start the camera and allow browser access. Capture uses a five-second timer.
+2. Start the camera and allow browser access. Capture starts automatically after a fully visible body stays steady for at least 3.5 seconds. There is no deadline to get into position. Green feedback indicates capture readiness, not measurement accuracy.
    Alternatively choose a JPEG, PNG, or WebP full-body photo.
 3. After detection, mark head top and floor. In reference mode, also mark the
    top/bottom of the reference's known vertical edge and confirm its setup.
